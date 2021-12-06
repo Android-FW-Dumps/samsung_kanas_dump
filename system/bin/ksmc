@@ -1,0 +1,169 @@
+#!/system/bin/sh
+# -*- compile-command: "adb push ksmc /data/ && adb shell sh /data/ksmc"; -*-
+#
+# Version: v4
+#
+
+ksm_path='/sys/kernel/mm/ksm'
+
+# Turn off KSM over this point (% memfree/memtotal)
+memfree_high=`cat $ksm_path/memfree_high`
+# Turn on KSM under this point (% memfree/memtotal)
+memfree_low=`cat $ksm_path/memfree_low`
+# Turn off KSM over this point (% cpu util)
+cpu_util_high=`cat $ksm_path/cpu_util_high`
+# Turn on KSM under this point (% cpu util)
+cpu_util_low=`cat $ksm_path/cpu_util_low`
+atimeold=0
+ctimeold=0
+
+typeset -a oldatime
+loopcnt=0
+sample_period=3
+sample_count=$((5 + 1))
+cpu_count=`cat /sys/devices/system/cpu/kernel_max`
+let cpu_count=$((++cpu_count))
+
+function enable_ksm
+{
+    run=`cat $ksm_path/run`
+    if [ $run == $1 ]; then return; fi
+    echo $1 > $ksm_path/run
+}
+
+function control_ksm
+{
+    IFS=" "
+    meminfo=`cat /proc/meminfo`
+    memtotal=${meminfo##*MemTotal:}	# MemTotal: xxx kB ---> xxx
+    memtotal=${memtotal%% kB*}
+    memfree=${meminfo##*MemFree:}	# MemFree: xxx kB ---> xxx
+    memfree=${memfree%% kB*}
+    cached=${meminfo#*Cached:}		# Cached: xxx kB ---> xxx
+    cached=${cached%% kB*}
+    let memfree=$((memfree + cached))
+	let memfree=$((memfree/1024))
+    let memfree_p=$((memfree*100*1024/memtotal))
+
+    stat=`cat /proc/stat`		# cpu x y z ---> x y z
+    stat=${stat#*cpu }
+    stat=${stat%%cpu0*}
+    stat=($stat)
+	let atimeold=$((atime))
+    let atime=$((stat[0]+stat[1]+stat[2]+stat[4]+stat[5]+stat[6]))
+	let ctimeold=$((ctime))
+	let ctime=$((stat[0]+stat[1]+stat[2]+stat[3]+stat[4]+stat[5]+stat[6]))
+	
+	
+    
+    let cpu_util=$((((atime-atimeold))*100/((ctime-ctimeold))))
+	ksmrun=`cat $ksm_path/run`
+
+    # save every time for past 10 seconds in array
+    oldatime[$index]=$atime
+	
+    if [ $memfree_p -ge $memfree_high -o $cpu_util -ge $cpu_util_high ]; then
+	enable_ksm 0
+    fi
+
+    if [ $memfree_p -le $memfree_low -a $cpu_util -le $cpu_util_low ]; then
+	enable_ksm 1
+    fi
+	
+    fullscan=`cat $ksm_path/full_scans`
+    newcomer=`cat $ksm_path/pages_newcomer`
+    memfree_high=`cat $ksm_path/memfree_high`
+    memfree_low=`cat $ksm_path/memfree_low`
+    cpu_util_high=`cat $ksm_path/cpu_util_high`
+    cpu_util_low=`cat $ksm_path/cpu_util_low`
+
+    # Compute newcomer_delta since last fullscan --> let's export as kernel sysfs
+    # Basic concept:
+    # If # of new pages marked as MERGEABLE are not many since last fullscan, slow down scan
+    # As # of new pages grow, the sleep_millisecs will be updated immediately
+    #
+    let newcomer_delta=$((newcomer-newcomer_old))
+
+    # pages_sharing since last sampling
+    pages_sharing=`cat $ksm_path/pages_sharing`
+    let pages_sharing_delta=$((pages_sharing-pages_sharing_old))
+    if [ $pages_sharing_delta -le 0 ]; then pages_sharing_delta=0; fi
+    pages_sharing_old=$pages_sharing
+
+    # pages_to_scan
+    pages_to_scan=`cat $ksm_path/pages_to_scan`
+
+    # compute new sleep_millisecs
+    let sleep_millisecs=$((60+((10000)/((((100*pages_sharing_delta)+(newcomer_delta*30)))+1))))
+    echo $sleep_millisecs > $ksm_path/sleep_millisecs
+    if [ "$fullscan" != "$fullscan_old" ]; then
+	newcomer_old=$newcomer
+	fullscan_old=$fullscan
+    fi
+}
+
+function monitor_ksm
+{
+    IFS="
+"
+    sys_name=(`ls $ksm_path`)
+    sys_value=(`cat $ksm_path/*`)
+    for i in ${!sys_name[@]}
+    do
+	sys_nv[$i]="${sys_name[i]/pages/pg} ${sys_value[i]}"
+    done
+
+    # If KSM module info is not supported by kernel, return here
+    if [ ! -d /sys/module/ksm/parameters ]; then return ; fi
+
+    IFS=","
+    lap_name=(`cat /sys/module/ksm/parameters/lap_name`)
+    lap_no=(`cat /sys/module/ksm/parameters/lap_no`)
+    lap_time=(`cat /sys/module/ksm/parameters/lap_time`)
+
+    for i in ${!lap_name[@]}
+    do
+	if [ "${lap_name[i]}" == "" ]; then continue; fi
+
+	# remove last 6 digits (usec -> sec) for possibly large (>32-bit) number
+	if [ ${%lap_time[i]} -le 6 ]; then
+	    sec=0;
+	else
+	    sec=${lap_time[i]%%??????};
+	fi
+
+	# print "monitor_ksm: $sec sec in ${lap_name[i]} ${lap_no[i]} ${lap_time[i]}"
+	time_nv[$i]="${lap_name[i]} $sec"
+    done 
+}
+
+# If KSM is not supported by kernel, just exit
+if [ ! -d $ksm_path ]; then
+    exit 1;
+fi
+
+# enable_ksm 2
+	
+while true
+do
+    uptime=`cat /proc/uptime`
+	pg_sharing=`cat $ksm_path/pages_sharing`
+	pg_shared=`cat $ksm_path/pages_shared`
+	memcmp_count=`cat $ksm_path/memcmp_count`
+	memcmp_jiffies=`cat $ksm_path/memcmp_jiffies`
+
+	
+    uptime=${uptime%% *}
+ 
+    control_ksm
+    monitor_ksm
+
+    sleep_millisecs=`cat $ksm_path/sleep_millisecs`
+    let sample_period=$((sleep_millisecs/1000))
+    if [ $sample_period -lt 3 ]; then sample_period=3; fi 
+    if [ $sample_period -gt 10 ]; then sample_period=10; fi 
+    sleep $sample_period
+    
+    let loopcnt=$((loopcnt+1))
+	
+done
