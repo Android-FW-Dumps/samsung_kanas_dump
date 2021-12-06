@@ -1,0 +1,14 @@
+# lineage_kanas-userdebug 8.1.0 OPM7.181205.001 244a85fddc test-keys
+- manufacturer: samsung
+- platform: 
+- codename: kanas
+- flavor: lineage_kanas-userdebug
+- release: 8.1.0
+- id: OPM7.181205.001
+- incremental: 244a85fddc
+- tags: test-keys
+- fingerprint: samsung/lineage_kanas/kanas:8.1.0/OPM7.181205.001/244a85fddc:userdebug/test-keys
+- is_ab: false
+- brand: samsung
+- branch: lineage_kanas-userdebug-8.1.0-OPM7.181205.001-244a85fddc-test-keys
+- repo: samsung_kanas_dump
